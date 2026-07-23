@@ -229,17 +229,28 @@ def main() -> int:
     project_id, branch_ids, rw_branch = extract_lakebase(config)
     log(f"Lakebase project: {project_id} | branches: {branch_ids} | rw endpoint branch: {rw_branch}")
 
-    # Step 1 — ensure the instance exists (create legacy-provisioned if not).
+    # The pre-hook is a ONE-TIME cutover. If the instance already exists it has
+    # already been created (legacy/provisioned) AND bound to this bundle, so the
+    # DAB owns it — there is nothing to do. Skip entirely and let `bundle deploy`
+    # reconcile. Only when the instance does NOT yet exist do we run the
+    # provision-then-bind cutover.
+    if instance_exists(args.cli, project_id, args.profile):
+        log("Instance already exists — it is bound and DAB-managed. Pre-hook is a no-op.")
+        log("Skipping create + bind; the pipeline will run `databricks bundle deploy` directly.")
+        return 0
+
+    # First-time cutover -------------------------------------------------------
+    # Step 1 — create the instance the legacy provisioned way (unlocks Dual
+    # Networking) and wait for AVAILABLE.
     cap_var = config.get("variables", {}).get("capacity", {})
     capacity = cap_var.get("value") or cap_var.get("default") or "CU_2"
-    if not instance_exists(args.cli, project_id, args.profile):
-        create_legacy_instance(args.cli, project_id, capacity, args.profile)
+    create_legacy_instance(args.cli, project_id, capacity, args.profile)
 
-    # Step 2 — bind the autoscaling keys to the existing instance.
-    log("Binding autoscaling resource keys to the existing instance...")
+    # Step 2 — bind the autoscaling keys so the bundle adopts the instance.
+    log("Binding autoscaling resource keys to the newly-created instance...")
     bind_all(args.cli, project_id, rw_branch, args.target, args.profile)
 
-    log("Pre-hook complete. The pipeline can now run `databricks bundle deploy`.")
+    log("Pre-hook complete (first-time cutover). The pipeline can now run `databricks bundle deploy`.")
     return 0
 
 

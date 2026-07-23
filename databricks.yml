@@ -23,7 +23,10 @@ bundle:
 variables:
   instance_name:
     description: Lakebase project / database instance name.
-    default: dual-network-demo
+    # A fresh name that does NOT yet exist in the workspace, so the pre-hook
+    # runs the full legacy-provision + bind cutover (demonstrating the migration
+    # path end-to-end). Once created + bound, later runs are a pre-hook no-op.
+    default: dual-network-demo-2
   capacity:
     description: Provisioned capacity used when the pre-hook first creates the instance.
     default: CU_2
