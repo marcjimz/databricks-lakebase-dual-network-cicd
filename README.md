@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/databricks/.github/main/profile/databricks_logo.png" alt="Databricks" height="60"/>
+  <img src="assets/databricks-logo.png" alt="Databricks" height="60"/>
 </p>
 
 <h1 align="center">Lakebase Dual-Network CI/CD</h1>
