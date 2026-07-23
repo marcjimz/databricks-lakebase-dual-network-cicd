@@ -59,8 +59,10 @@ jobs:
             --json '{"enableIpAccessLists": "true"}' || true
 
           LABEL="gha-${GITHUB_RUN_ID}"
-          RESP=$(databricks ip-access-lists create "$LABEL" ALLOW \
-            --json "{\"ip_addresses\":[\"${RUNNER_IP}/32\"]}" -o json)
+          # When --json is used, label + list_type must be IN the JSON body
+          # (the CLI rejects mixing positional args with --json).
+          RESP=$(databricks ip-access-lists create -o json \
+            --json "{\"label\":\"${LABEL}\",\"list_type\":\"ALLOW\",\"ip_addresses\":[\"${RUNNER_IP}/32\"]}")
           echo "$RESP"
           LIST_ID=$(echo "$RESP" | jq -r '.ip_access_list.list_id // .list_id')
           echo "list_id=$LIST_ID" >> "$GITHUB_OUTPUT"
