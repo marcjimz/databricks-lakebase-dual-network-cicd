@@ -1,0 +1,11 @@
+# Databricks bundle state / local artifacts
+.databricks/
+
+# Session memory (not part of the artifact)
+MEMORY.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

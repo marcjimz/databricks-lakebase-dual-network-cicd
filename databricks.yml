@@ -1,0 +1,66 @@
+# =============================================================================
+# Lakebase Autoscaling — end-state bundle (CI/CD deploys this directly)
+# =============================================================================
+# REQUIREMENT: Databricks CLI v1.2.0+ (needed for `bundle deployment bind`).
+#
+# This bundle declares the DESIRED END STATE: a Lakebase project managed via the
+# Autoscaling resource types (postgres_projects / postgres_branches /
+# postgres_endpoints), with branching.
+#
+# The instance itself is first stood up the LEGACY PROVISIONED way by the CI
+# pre-hook (scripts/lakebase_prehook.py), which then BINDS these autoscaling
+# keys to that existing instance. Once bound, `databricks bundle deploy` runs as
+# a normal CI/CD step and reconciles everything below — including creating any
+# NEW branches that do not yet exist (e.g. feature-x).
+#
+# No unbind is needed: the instance is never declared as a `database_instances`
+# resource, so the bundle only ever tracks it through these autoscaling keys.
+# =============================================================================
+
+bundle:
+  name: lakebase-dual-network-cicd
+
+variables:
+  instance_name:
+    description: Lakebase project / database instance name.
+    default: dual-network-demo
+  capacity:
+    description: Provisioned capacity used when the pre-hook first creates the instance.
+    default: CU_2
+
+resources:
+
+  # --- The Lakebase project (autoscaling) -----------------------------------
+  postgres_projects:
+    pg_root:
+      project_id: ${var.instance_name}
+
+  # --- Branches --------------------------------------------------------------
+  postgres_branches:
+    # Default production branch — bound by the pre-hook to the existing instance.
+    pg_prod:
+      branch_id: production
+      parent: ${resources.postgres_projects.pg_root.id}
+
+    # A NEW branch created by `bundle deploy` (no bind). Demonstrates that once
+    # bound, normal CI/CD fully manages the autoscaling database.
+    # New branches REQUIRE an expiration: no_expiry / ttl / expire_time.
+    pg_feature:
+      branch_id: feature-x
+      parent: ${resources.postgres_projects.pg_root.id}
+      no_expiry: true
+
+  # --- Read/write compute endpoint on the production branch ------------------
+  postgres_endpoints:
+    pg_prod_rw:
+      endpoint_id: primary
+      parent: ${resources.postgres_branches.pg_prod.id}
+      endpoint_type: ENDPOINT_TYPE_READ_WRITE
+
+targets:
+  dev:
+    mode: development
+    default: true
+    # host + auth come from the environment (OAuth service principal in CI):
+    #   DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET
+    # Locally you can instead use a CLI profile: `databricks bundle deploy -p <profile>`.

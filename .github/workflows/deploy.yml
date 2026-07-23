@@ -1,0 +1,64 @@
+name: Lakebase Dual-Network Deploy
+
+# Deploys the Lakebase autoscaling bundle. Before the normal `bundle deploy`, a
+# pre-hook provisions the instance the legacy way (if missing) and binds the
+# autoscaling resources to it — automating the manual cutover.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  # OAuth service principal (M2M). Configure these as repository secrets:
+  #   DATABRICKS_HOST           e.g. https://<workspace>.cloud.databricks.com
+  #   DATABRICKS_CLIENT_ID      service principal application (client) id
+  #   DATABRICKS_CLIENT_SECRET  service principal OAuth secret
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  BUNDLE_TARGET: dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Databricks CLI (v1.2.0+)
+        uses: databricks/setup-cli@main
+
+      - name: Show CLI version
+        run: databricks --version
+
+      - name: Validate bundle
+        run: databricks bundle validate -t "$BUNDLE_TARGET"
+
+      # --- Pre-hook: the 3 manual steps, automated ------------------------- #
+      # Step 1  create the instance the legacy provisioned way (if missing)
+      # Step 2  bind the autoscaling resource keys to that instance
+      # (no unbind needed — the instance is never a `database_instances` resource)
+      - name: Pre-hook — provision (legacy) + bind
+        run: python3 scripts/lakebase_prehook.py --target "$BUNDLE_TARGET"
+
+      # --- Natural CI/CD: deploy the autoscaling bundle directly ----------- #
+      # Reconciles the bound instance and CREATES any new branches (feature-x).
+      - name: Deploy bundle
+        run: databricks bundle deploy -t "$BUNDLE_TARGET"
+
+      # --- Optional verification ------------------------------------------- #
+      - name: Verify branches
+        run: |
+          PROJECT=$(databricks bundle validate -t "$BUNDLE_TARGET" -o json \
+            | python3 -c "import json,sys,re; c=json.load(sys.stdin); \
+              p=next(iter(c['resources']['postgres_projects'].values()))['project_id']; \
+              v=c.get('variables',{}); \
+              print(re.sub(r'\$\{var\.([A-Za-z_][A-Za-z0-9_]*)\}', lambda m: str(v.get(m.group(1),{}).get('value', v.get(m.group(1),{}).get('default',''))), p))")
+          echo "Branches for project $PROJECT:"
+          databricks postgres list-branches "projects/$PROJECT"
