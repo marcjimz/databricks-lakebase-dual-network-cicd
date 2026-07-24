@@ -21,7 +21,13 @@ env:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Runs on a GitHub larger-runner group configured with a STATIC public IP.
+    # That IP (or its small range) is allowlisted on the workspace ONCE, out of
+    # band, from an already-permitted host — see README "Network access (IP ACLs)".
+    # Because the runner IP is stable and pre-allowlisted, the workflow does NOT
+    # need to mutate the workspace IP ACL at runtime.
+    # NOTE: replace this label with your org's larger-runner group label.
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,39 +43,13 @@ jobs:
       - name: Show CLI version
         run: databricks --version
 
-      # --- Network prerequisite: allow THIS runner's IP (just-in-time) ------ #
-      # If the workspace enforces IP access lists, the GitHub-hosted runner must
-      # be allowlisted or every workspace API call (pre-hook + bundle deploy) is
-      # rejected. GitHub publishes ~7,000+ rotating Actions CIDRs, but the
-      # Databricks IP ACL API caps at 1,000 values combined — so we cannot add
-      # the full meta ranges. Instead we allowlist ONLY this run's public IP as a
-      # single /32, then remove it in an always() cleanup step below.
-      #
-      # Requires a service principal with admin rights to manage IP access lists.
-      # If your workspace does not enforce IP ACLs, delete this step and the
-      # cleanup step.
-      - name: Allowlist this runner's IP
-        id: allowlist
+      # Network prerequisite: this runner's STATIC IP must already be on the
+      # workspace IP access list (added once, out of band). No runtime IP-ACL
+      # mutation is performed here — see README "Network access (IP ACLs)".
+      # This step just surfaces the egress IP for debugging if a call is blocked.
+      - name: Show runner egress IP
         run: |
-          RUNNER_IP=$(curl -s https://api.ipify.org)
-          echo "Runner public IP: $RUNNER_IP"
-
-          # IP access lists have no effect until the feature is enabled (idempotent).
-          databricks workspace-conf set-status \
-            --json '{"enableIpAccessLists": "true"}' || true
-
-          LABEL="gha-${GITHUB_RUN_ID}"
-          # When --json is used, label + list_type must be IN the JSON body
-          # (the CLI rejects mixing positional args with --json).
-          RESP=$(databricks ip-access-lists create -o json \
-            --json "{\"label\":\"${LABEL}\",\"list_type\":\"ALLOW\",\"ip_addresses\":[\"${RUNNER_IP}/32\"]}")
-          echo "$RESP"
-          LIST_ID=$(echo "$RESP" | jq -r '.ip_access_list.list_id // .list_id')
-          echo "list_id=$LIST_ID" >> "$GITHUB_OUTPUT"
-          echo "Created ALLOW list $LIST_ID ($LABEL) for ${RUNNER_IP}/32."
-
-          # ACL changes can take a moment to propagate to the data plane.
-          sleep 20
+          echo "Runner egress IP: $(curl -s https://api.ipify.org)"
 
       - name: Validate bundle
         run: databricks bundle validate -t "$BUNDLE_TARGET"
@@ -96,13 +76,3 @@ jobs:
               print(re.sub(r'\$\{var\.([A-Za-z_][A-Za-z0-9_]*)\}', lambda m: str(v.get(m.group(1),{}).get('value', v.get(m.group(1),{}).get('default',''))), p))")
           echo "Branches for project $PROJECT:"
           databricks postgres list-branches "projects/$PROJECT"
-
-      # --- Cleanup: always remove this run's IP allowlist entry ------------- #
-      # Runs even if an earlier step failed, so we never leave stale /32 ALLOW
-      # lists (and their transient IPs) accumulating on the workspace.
-      - name: Remove this runner's IP allowlist
-        if: always() && steps.allowlist.outputs.list_id != ''
-        run: |
-          echo "Deleting ALLOW list ${{ steps.allowlist.outputs.list_id }} ..."
-          databricks ip-access-lists delete "${{ steps.allowlist.outputs.list_id }}" \
-            && echo "Removed." || echo "Delete failed (may already be gone) — continuing."
