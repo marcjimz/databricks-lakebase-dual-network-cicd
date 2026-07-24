@@ -80,7 +80,7 @@ to the bundle.
 |------|---------|
 | `databricks.yml` | The Lakebase autoscaling bundle (project + branches + RW endpoint). |
 | `scripts/lakebase_prehook.py` | Pre-hook: parse bundle → if instance missing, create legacy + bind; else no-op. Stdlib + `databricks` CLI only. |
-| `.github/workflows/deploy.yml` | GitHub Actions pipeline: validate → pre-hook → deploy → verify (on a static-IP runner). |
+| `.github/workflows/deploy.yml` | GitHub Actions pipeline: auth → validate → pre-hook → deploy → verify. |
 
 ## Prerequisites
 
@@ -89,48 +89,36 @@ to the bundle.
 - A Databricks workspace with **Lakebase** enabled.
 - An **OAuth service principal** (M2M) with permission to create Lakebase instances and
   manage the project.
-- If the workspace enforces IP ACLs: a **runner with a static egress IP** that has been
-  allowlisted once (see [Network access](#network-access-ip-acls) below).
+- The target workspace must **not enforce IP access lists** for the standard
+  `ubuntu-latest` runner to reach it — see [Network access](#network-access-ip-acls) below.
 
 ### Network access (IP ACLs)
 
-If the target workspace enforces **IP access lists**, the CI runner must already be
-allowlisted or every workspace API call (pre-hook + `bundle deploy`) is rejected with
-`Source IP address ... is blocked by Databricks IP ACL`.
+The workflow runs on a standard `ubuntu-latest` GitHub-hosted runner, whose egress IP is
+**dynamic** (a different address every run). This only works if the target workspace does
+**not enforce IP access lists** for the control-plane APIs the pipeline calls.
 
-**A GitHub-hosted runner cannot solve this at runtime.** It would have to call the IP-ACL
-API to add itself — but that call is gated by the very list it's trying to edit, so it's
-blocked before it can unblock itself. And its egress IP is **dynamic** (a different
-address every run), so you can't pre-allowlist a single `/32`. Adding GitHub's published
-runner ranges doesn't work either: [`api.github.com/meta`](https://api.github.com/meta)
-`.actions[]` is **7,000+ rotating CIDRs**, but the Databricks IP ACL API caps at **1,000
-values combined** (`400 QUOTA_EXCEEDED`).
+If the workspace **does** enforce IP ACLs, every call (auth, `bundle validate`, the
+pre-hook, `bundle deploy`) is rejected with
+`Source IP address ... is blocked by Databricks IP ACL`. A GitHub-hosted runner **cannot**
+self-allowlist out of this: the IP-ACL management API is itself gated by the list it would
+edit, and the runner's IP changes every run so you can't pre-allowlist a `/32`. (Adding
+GitHub's published [`api.github.com/meta`](https://api.github.com/meta) `.actions[]` ranges
+doesn't fit either — 7,000+ CIDRs vs the API's 1,000-value cap → `400 QUOTA_EXCEEDED`.)
 
-**This workflow therefore assumes a runner with a STATIC egress IP** (a GitHub
-[larger-runner group with a static IP range](https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners/about-larger-runners#networking-for-larger-runners),
-or a self-hosted runner behind a NAT gateway). One-time setup:
+Pick one of:
 
-1. From an **already-allowlisted host** (e.g. your laptop), add the runner's static IP or
-   range to the workspace ALLOW list — once:
+- **Disable IP-ACL enforcement on the demo workspace** (simplest, and what the companion
+  `lakebase-fleet-controller` pipeline does). Then `ubuntu-latest` just works:
 
-   ```bash
-   databricks ip-access-lists create --json '{
-     "label": "ci-runner",
-     "list_type": "ALLOW",
-     "ip_addresses": ["<static-egress-ip-or-range>"]
-   }'
-   ```
+  ```bash
+  databricks workspace-conf set-status --json '{"enableIpAccessLists": "false"}'
+  ```
 
-2. Point the workflow at that runner group by setting the repo/org **variable**
-   `CI_RUNNER_LABEL` (Settings → Secrets and variables → Actions → Variables) to your
-   larger-runner group label. The workflow reads it via
-   `runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}`.
-
-The workflow itself performs **no** runtime IP-ACL mutation — it only prints its egress IP
-(the *Show runner egress IP* step) to aid debugging if a call is still blocked.
-
-> If your workspace does **not** enforce IP ACLs, none of this applies — the default
-> `ubuntu-latest` runner works and you can ignore `CI_RUNNER_LABEL`.
+- **Use a runner with a static egress IP** (a GitHub larger-runner group with a static IP
+  range, or a self-hosted runner behind a NAT gateway) and allowlist that one IP/range
+  once, out of band, from an already-permitted host. Then change `runs-on:` to that
+  runner's label.
 
 ## Setup
 

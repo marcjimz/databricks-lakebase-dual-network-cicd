@@ -21,13 +21,7 @@ env:
 
 jobs:
   deploy:
-    # Runs on a GitHub larger-runner group configured with a STATIC public IP.
-    # That IP (or its small range) is allowlisted on the workspace ONCE, out of
-    # band, from an already-permitted host — see README "Network access (IP ACLs)".
-    # Because the runner IP is stable and pre-allowlisted, the workflow does NOT
-    # need to mutate the workspace IP ACL at runtime.
-    # NOTE: replace this label with your org's larger-runner group label.
-    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,13 +37,10 @@ jobs:
       - name: Show CLI version
         run: databricks --version
 
-      # Network prerequisite: this runner's STATIC IP must already be on the
-      # workspace IP access list (added once, out of band). No runtime IP-ACL
-      # mutation is performed here — see README "Network access (IP ACLs)".
-      # This step just surfaces the egress IP for debugging if a call is blocked.
-      - name: Show runner egress IP
-        run: |
-          echo "Runner egress IP: $(curl -s https://api.ipify.org)"
+      # Fail fast with a clear error if auth/network is wrong before touching
+      # bundle state (mirrors the working lakebase-fleet-controller pipeline).
+      - name: Authenticate
+        run: databricks current-user me
 
       - name: Validate bundle
         run: databricks bundle validate -t "$BUNDLE_TARGET"
